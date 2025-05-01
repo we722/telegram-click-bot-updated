@@ -1,54 +1,59 @@
 import logging
-import os
 import sqlite3
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-AD_LINK = os.getenv("AD_LINK")
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Initialize SQLite
-conn = sqlite3.connect("clickbot.db", check_same_thread=False)
-c = conn.cursor()
-c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
-c.execute("CREATE TABLE IF NOT EXISTS clicks (user_id INTEGER, count INTEGER)")
+# Load from environment
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+AD_LINK = os.environ.get("AD_LINK", "https://example.com")
+
+# Database setup
+conn = sqlite3.connect("clickbot.db")
+cursor = conn.cursor()
+cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY)")
+cursor.execute("CREATE TABLE IF NOT EXISTS clicks (user_id INTEGER)")
 conn.commit()
 
+# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user.id,))
+    user_id = update.effective_user.id
+    cursor.execute("INSERT OR IGNORE INTO users (id) VALUES (?)", (user_id,))
     conn.commit()
-    keyboard = [[InlineKeyboardButton("Click to Earn", url=AD_LINK)]]
+
+    keyboard = [[InlineKeyboardButton("Click & Earn", url=AD_LINK)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Welcome! Click the button below to earn:", reply_markup=reply_markup)
 
-async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-    c.execute("SELECT SUM(count) FROM clicks")
-    total_clicks = c.fetchone()[0] or 0
-    income = total_clicks * 0.01  # Example income per click
-    await update.message.reply_text(f"Total Users: {total_users}
-Total Clicks: {total_clicks}
-Estimated Income: ${income:.2f}")
+    await update.message.reply_text("Welcome! Click the button below to earn points.", reply_markup=reply_markup)
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Click Tracker
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user = query.from_user
-    c.execute("INSERT OR IGNORE INTO clicks (user_id, count) VALUES (?, 0)", (user.id,))
-    c.execute("UPDATE clicks SET count = count + 1 WHERE user_id = ?", (user.id,))
+    user_id = query.from_user.id
+    cursor.execute("INSERT INTO clicks (user_id) VALUES (?)", (user_id,))
     conn.commit()
-    await query.answer("Click registered!")
+    await query.answer()
 
-def main():
-    logging.basicConfig(level=logging.INFO)
+# Stat command
+async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM clicks")
+    total_clicks = cursor.fetchone()[0]
+    income = total_clicks * 0.01  # Example: 1 click = $0.01
+
+    msg = f"📊 Stats:\nUsers: {total_users}\nClicks: {total_clicks}\nEstimated Income: ${income:.2f}"
+    await update.message.reply_text(msg)
+
+# Main
+if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stat", stat))
-    app.add_handler(CallbackQueryHandler(button))
-
+    app.add_handler(CallbackQueryHandler(button_click))
+    logger.info("Bot is running...")
     app.run_polling()
-
-if __name__ == '__main__':
-    main()
